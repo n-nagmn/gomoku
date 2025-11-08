@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>五目並べ (PHP + DB)</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f0f0;
+        }
+        h1 {
+            color: #333;
+        }
+        #game-info {
+            font-size: 1.2em;
+            margin: 10px;
+            min-height: 2em;
+        }
+        #board-container {
+            width: 600px;
+            height: 600px;
+            display: grid;
+            /* 15x15のグリッドを作成 */
+            grid-template-columns: repeat(15, 1fr);
+            grid-template-rows: repeat(15, 1fr);
+            border: 2px solid #555;
+            background-color: #d2b48c; /* 碁盤の色 */
+        }
+        .cell {
+            width: 100%;
+            height: 100%;
+            box-sizing: border-box;
+            /* 碁盤の線を引く */
+            border-right: 1px solid #555;
+            border-bottom: 1px solid #555;
+            position: relative;
+        }
+        /* 最後の行・列の線を消す */
+        .cell:nth-child(15n) { border-right: none; }
+        .cell:nth-last-child(-n+15) { border-bottom: none; }
+
+        .cell:hover {
+            background-color: rgba(255, 255, 0, 0.3);
+        }
+        .stone {
+            width: 80%;
+            height: 80%;
+            border-radius: 50%;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.4);
+        }
+        .player1 {
+            background-color: #000; /* 黒石 */
+        }
+        .player2 {
+            background-color: #fff; /* 白石 */
+        }
+        #start-button {
+            font-size: 1.2em;
+            padding: 10px 20px;
+            margin-top: 15px;
+            cursor: pointer;
+        }
+        #start-button:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>五目並べ</h1>
+    <div id="game-info"></div>
+    <div id="board-container"></div>
+    <button id="start-button">ゲームを探す</button>
+
+    <script>
+        const BOARD_SIZE = 15;
+        const boardContainer = document.getElementById('board-container');
+        const infoDisplay = document.getElementById('game-info');
+        const startButton = document.getElementById('start-button');
+        
+        // ★★★ 1. クライアント固有のIDをセッションストレージで管理 ★★★
+        let myPlayerId = 'player_' + Date.now() + Math.floor(Math.random() * 10000);
+
+        let gameState = {
+            game_id: null,
+            my_player_id: myPlayerId, // ★ 常に自分のIDを保持
+            my_role: null, // "player_1" or "player_2"
+            player_1_id: null, // ★ 石の色分け用にP1のIDを保存する
+            current_turn_id: null,
+            status: "init"
+        };
+        
+        let pollingInterval = null;
+
+        // 1. 盤面(セル)の初期化
+        function initializeBoard() {
+            boardContainer.innerHTML = '';
+            for (let y = 0; y < BOARD_SIZE; y++) {
+                for (let x = 0; x < BOARD_SIZE; x++) {
+                    const cell = document.createElement('div');
+                    cell.classList.add('cell');
+                    cell.dataset.x = x;
+                    cell.dataset.y = y;
+                    boardContainer.appendChild(cell);
+                }
+            }
+        }
+        
+        // 2. 盤面の描画 (サーバーからの情報に基づいて)
+        function drawBoard(moves) {
+            // 既存の石をすべてクリア
+            document.querySelectorAll('.stone').forEach(stone => stone.remove());
+            
+            // サーバーからの石のリストを描画
+            moves.forEach(move => {
+                const cell = document.querySelector(`.cell[data-x='${move.x_coord}'][data-y='${move.y_coord}']`);
+                if (cell) {
+                    const stone = document.createElement('div');
+                    stone.classList.add('stone');
+                    // ★ P1のID (gameState.player_1_id) と比較して色分けする
+                    const playerClass = (move.player_id === gameState.player_1_id) ? 'player1' : 'player2';
+                    stone.classList.add(playerClass);
+                    cell.appendChild(stone);
+                }
+            });
+        }
+        
+        // 3. 情報表示の更新
+        function updateInfo() {
+            if (gameState.status === 'waiting') {
+                infoDisplay.textContent = `ゲームID: ${gameState.game_id} | 対戦相手を待っています...`;
+            } else if (gameState.status === 'playing') {
+                const roleName = (gameState.my_role === 'player_1') ? '黒 (P1)' : '白 (P2)';
+                if (gameState.current_turn_id === gameState.my_player_id) {
+                    infoDisplay.textContent = `あなたの番です (${roleName})`;
+                } else {
+                    infoDisplay.textContent = `相手の番です (${roleName})`;
+                }
+            } else if (gameState.status === 'finished') {
+                if (gameState.winner_id === gameState.my_player_id) {
+                    infoDisplay.textContent = "あなたの勝利です！";
+                } else {
+                    infoDisplay.textContent = "あなたの敗北です...。";
+                }
+                clearInterval(pollingInterval); // ゲーム終了なのでポーリング停止
+            }
+        }
+
+        // ★★★ 4. API: ゲームを探す (POSTに変更) ★★★
+        startButton.addEventListener('click', async () => {
+            try {
+                // POSTメソッドで自分のIDを送る
+                const response = await fetch('api_find_game.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ my_player_id: gameState.my_player_id })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+                
+                gameState.game_id = data.game_id;
+                // gameState.my_player_id は既に設定済み
+                gameState.my_role = data.role;
+                
+                startButton.disabled = true;
+                startButton.textContent = "ゲームに参加しました";
+                
+                // ポーリングを開始
+                startPolling();
+                
+            } catch (err) {
+                infoDisplay.textContent = "エラー: " + err.message;
+            }
+        });
+
+        // 5. API: ポーリング (player_1_id を保存するように)
+        function startPolling() {
+            if (pollingInterval) clearInterval(pollingInterval);
+            
+            // ポーリングを即時実行
+            fetchState(); 
+            
+            pollingInterval = setInterval(fetchState, 2000); // 2秒ごとに更新
+        }
+        
+        async function fetchState() {
+            if (!gameState.game_id) return;
+            
+            try {
+                const response = await fetch(`api_get_state.php?game_id=${gameState.game_id}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+
+                // サーバーからの最新情報でローカルのgameStateを更新
+                gameState.status = data.status;
+                gameState.current_turn_id = data.current_turn_id;
+                gameState.winner_id = data.winner_id;
+                gameState.player_1_id = data.player_1_id; // ★ P1のIDを保存 (石の色分け用)
+                
+                // 盤面を再描画
+                drawBoard(data.moves);
+                // 情報表示を更新
+                updateInfo();
+                
+            } catch (err) {
+                infoDisplay.textContent = "ポーリングエラー: " + err.message;
+                clearInterval(pollingInterval);
+            }
+        }
+        
+        // 6. API: 石を置く (ロジックは変更なし)
+        boardContainer.addEventListener('click', async (e) => {
+            // クリックしたのがセル以外、または自分のターンでなければ何もしない
+            if (!e.target.classList.contains('cell')) return;
+            if (gameState.status !== 'playing' || gameState.current_turn_id !== gameState.my_player_id) {
+                return;
+            }
+            
+            // 既に石が置かれていないかチェック
+            if (e.target.querySelector('.stone')) {
+                infoDisplay.textContent = "そこには既に石があります";
+                return;
+            }
+            
+            const x = parseInt(e.target.dataset.x, 10);
+            const y = parseInt(e.target.dataset.y, 10);
+            
+            try {
+                const response = await fetch('api_place_move.php', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        game_id: gameState.game_id,
+                        player_id: gameState.my_player_id,
+                        x: x,
+                        y: y
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                if (result.error) {
+                    infoDisplay.textContent = `エラー: ${result.error}`;
+                    return;
+                }
+                
+                // 成功したら、ポーリングを待たずに即座に最新の状態を取得
+                if (pollingInterval) {
+                    clearInterval(pollingInterval); // 現在のタイマーを止め
+                    fetchState(); // 即時実行し
+                    pollingInterval = setInterval(fetchState, 2000); // タイマーを再開
+                }
+                
+            } catch (err) {
+                infoDisplay.textContent = "着手エラー: " + err.message;
+            }
+        });
+
+        // 初期化
+        initializeBoard();
+
+    </script>
+</body>
+</html>
