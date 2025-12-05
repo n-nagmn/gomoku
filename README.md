@@ -72,7 +72,6 @@ $pass = 'your_strong_password'; // set your password
 PHP-FPMを使用する場合の `sites-available` 設定例です。
 
 ```nginx
-// /etc/nginx/sites-available/default
 server {
     listen 80;
     server_name your-domain.local;
