@@ -1,116 +1,81 @@
-# Multiplayer Pong with Socket.IO
+# NodeJS Pong (WebSocket Server)
 
-Node.js + Socket.IO + Nginx で構築された、リアルタイム対戦型Pongゲーム。
-Websocketを使用した低遅延な同期通信と、Nginxのリバースプロキシ構成を含めた実装です。
+Node.js (Socket.IO) と Nginx を使用した、リアルタイム・マルチプレイヤー Pong ゲームです。
+サーバーサイドでゲームロジックを判定し、Nginx をリバースプロキシとして使用して配信する構成です。
 
-## Features
+## 構成概要
 
-- **Real-time Gameplay**: Socket.IOによる双方向通信
-- **Room Management**: 接続ユーザーの自動マッチングとルーム生成
-- **Server-side Logic**: 座標計算や判定をサーバー側で完結させる堅牢な設計
-- **Production Ready**: Nginxリバースプロキシ + Systemdによるサービス化
+- **Server Side**: `~/pong-server` (Node.js + Socket.IO)
+- **Client Side**: `/var/www/html/pong` (index.html)
+- **Middleware**: Nginx (Web Server / Reverse Proxy)
 
-## Tech Stack
+## 1. 事前準備 (Installation)
 
-- **Runtime**: Node.js (v18+)
-- **Protocol**: WebSocket (Socket.IO v4)
-- **Web Server**: Nginx
-- **OS**: Ubuntu / Debian Linux
+Ubuntu/Debian 系での環境構築手順です。
 
-## Installation
-
-### 1. Setup Node.js Application
+### 必要なソフトウェアのインストール
 
 ```bash
-# Clone repository
-git clone [https://github.com/YOUR_USERNAME/pong-server.git](https://github.com/YOUR_USERNAME/pong-server.git)
-cd pong-server
+sudo apt update
+sudo apt install nginx -y
+sudo apt install avahi-daemon -y  # .local ドメインでのアクセス用
 
-# Install dependencies
-npm install
+# Node.js のインストール (NodeSource スクリプト推奨)
+curl -fsSL [https://deb.nodesource.com/setup_lts.x](https://deb.nodesource.com/setup_lts.x) | sudo -E bash -
+sudo apt-get install -y nodejs
 ````
 
-### 2\. Configuration
+## 2\. セットアップ手順
 
-`server.js` 内の `allowedOrigins` を環境に合わせて変更してください。
+### 2-1. サーバー側 (Node.js) の準備
 
-```javascript
-const allowedOrigins = [
-  "[http://your-hostname.local](http://your-hostname.local)",  // Nginxのserver_name
-  "http://localhost:3000"
-];
-```
-
-## Usage (Development)
-
-ローカル環境での動作確認コマンドです。
+ホームディレクトリ配下にプロジェクトを作成します。
 
 ```bash
-npm start
-# Server running at http://localhost:3000
+mkdir ~/pong-server
+cd ~/pong-server
+npm init -y
+npm install socket.io
 ```
 
-## Deployment
+※ `server.js` をこのディレクトリに配置してください。
 
-本番環境（Linuxサーバー）へのデプロイ設定例です。
+### 2-2. クライアント側 (Web) の準備
 
-### Systemd Service
-
-常時稼働させるためのSystemd設定です。
-
-\<details\>
-\<summary\>View pong.service\</summary\>
-
-`/etc/systemd/system/pong.service`
-
-```ini
-[Unit]
-Description=Pong WebSocket Server
-After=network.target
-
-[Service]
-Type=simple
-User=ubuntu
-WorkingDirectory=/home/ubuntu/pong-server
-ExecStart=/usr/bin/node server.js
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-\</details\>
-
-コマンド:
+Nginx のドキュメントルート配下にクライアント用ディレクトリを作成します。
 
 ```bash
-sudo systemctl enable pong
-sudo systemctl start pong
+sudo mkdir -p /var/www/html/pong
 ```
 
-### Nginx Configuration
+※ `index.html` を `/var/www/html/pong/index.html` として保存してください。
 
-WebSocketを通すためのリバースプロキシ設定です。
+## 3\. サーバー設定 (Configuration)
+
+### Nginx 設定 (リバースプロキシ)
+
+`/etc/nginx/sites-available/default` を編集し、静的ファイルへのアクセスと WebSocket 通信（ポート3000）への転送を設定します。
 
 \<details\>
-\<summary\>View Nginx Config\</summary\>
-
-`/etc/nginx/sites-available/default`
+\<summary\>設定ファイルの中身を表示\</summary\>
 
 ```nginx
 server {
     listen 80;
-    server_name your-hostname.local;
+    server_name ubuntu.local; # ホスト名に合わせて変更してください
 
+    # ルートアクセスを /pong/ にリダイレクト
     location = / {
         return 301 /pong/;
     }
 
+    # HTML/CSS/JS などの静的ファイルを配信
     location /pong/ {
         alias /var/www/html/pong/;
         index index.html;
     }
 
+    # WebSocket通信を Node.js (3000番) に転送
     location /socket.io/ {
         proxy_pass http://localhost:3000;
         proxy_http_version 1.1;
@@ -124,13 +89,65 @@ server {
 
 \</details\>
 
-設定反映:
+設定の反映:
 
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
 ```
 
+## 4\. 実行方法
+
+### 手動起動
+
+```bash
+cd ~/pong-server
+node server.js
+```
+
+ブラウザで `http://ubuntu.local/pong/`（または設定したホスト名）に2つのタブでアクセスするとゲームが開始されます。
+
+## 5\. 自動起動設定 (Systemd)
+
+サーバー再起動時にも自動的に Node.js が起動するように設定します。
+
+**ファイル作成**: `/etc/systemd/system/pong.service`
+
+\<details\>
+\<summary\>pong.service の内容を表示\</summary\>
+
+```ini
+[Unit]
+Description=Pong WebSocket Server (Node.js)
+After=network.target
+
+[Service]
+Type=simple
+Restart=always
+
+# 実行ユーザー (環境に合わせて変更)
+User=ubuntu
+
+# server.js があるディレクトリ
+WorkingDirectory=/home/ubuntu/pong-server
+
+# 実行コマンド ('which node' で調べたパスを使用)
+ExecStart=/usr/bin/node server.js
+
+[Install]
+WantedBy=multi-user.target
+```
+
+\</details\>
+
+**サービスの有効化と起動**:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable pong.service
+sudo systemctl start pong.service
+```
+
 ## License
 
-[MIT](https://www.google.com/search?q=LICENSE)
+MIT
