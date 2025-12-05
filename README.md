@@ -81,6 +81,8 @@ WantedBy=multi-user.target
 
 \</details\>
 
+コマンド:
+
 ```bash
 sudo systemctl enable pong
 sudo systemctl start pong
@@ -122,6 +124,8 @@ server {
 
 \</details\>
 
+設定反映:
+
 ```bash
 sudo nginx -t
 sudo systemctl reload nginx
@@ -130,5 +134,3 @@ sudo systemctl reload nginx
 ## License
 
 [MIT](https://www.google.com/search?q=LICENSE)
-
-```
