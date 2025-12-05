@@ -1,151 +1,106 @@
-# NodeJS Pong (WebSocket Server)
+# Gomoku (PHP + MySQL)
 
-Node.js (Socket.IO) と Nginx を使用した、リアルタイム・マルチプレイヤー Pong ゲームです。
-サーバーサイドでゲームロジックを判定し、Nginx をリバースプロキシとして使用して配信する構成です。
+PHPとMySQLで実装されたステートレスな五目並べアプリケーション。
+HTTPポーリングを使用した非同期通信により、ブラウザ間でのリアルタイム対戦を実現しています。
 
-## 構成概要
+## Requirements
 
-- **Server Side**: `~/pong-server` (Node.js + Socket.IO)
-- **Client Side**: `/var/www/html/pong` (index.html)
-- **Middleware**: Nginx (Web Server / Reverse Proxy)
+* **PHP**: 8.0+ (pdo_mysql extension enabled)
+* **MySQL**: 5.7+ or 8.0+
+* **Web Server**: Apache or Nginx
 
-## 1. 事前準備 (Installation)
+## Installation
 
-Ubuntu/Debian 系での環境構築手順です。
+### 1. Setup Database
+MySQLにてデータベースおよびテーブルを作成します。
 
-### 必要なソフトウェアのインストール
+```sql
+CREATE DATABASE gomoku_db;
+CREATE USER 'gomoku_user'@'localhost' IDENTIFIED BY 'your_strong_password';
+GRANT ALL PRIVILEGES ON gomoku_db.* TO 'gomoku_user'@'localhost';
+FLUSH PRIVILEGES;
 
-```bash
-sudo apt update
-sudo apt install nginx -y
-sudo apt install avahi-daemon -y  # .local ドメインでのアクセス用
+USE gomoku_db;
 
-# Node.js のインストール (NodeSource スクリプト推奨)
-curl -fsSL [https://deb.nodesource.com/setup_lts.x](https://deb.nodesource.com/setup_lts.x) | sudo -E bash -
-sudo apt-get install -y nodejs
+CREATE TABLE games (
+    game_id INT AUTO_INCREMENT PRIMARY KEY,
+    player_1_id VARCHAR(255),
+    player_2_id VARCHAR(255),
+    current_turn_id VARCHAR(255),
+    status VARCHAR(20) NOT NULL DEFAULT 'waiting',
+    winner_id VARCHAR(255),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE moves (
+    move_id INT AUTO_INCREMENT PRIMARY KEY,
+    game_id INT NOT NULL,
+    player_id VARCHAR(255) NOT NULL,
+    x_coord TINYINT NOT NULL,
+    y_coord TINYINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (game_id) REFERENCES games(game_id)
+);
 ````
 
-## 2\. セットアップ手順
+### 2\. Deploy Application
 
-### 2-1. サーバー側 (Node.js) の準備
-
-ホームディレクトリ配下にプロジェクトを作成します。
+Webサーバーのドキュメントルート（例: `/var/www/html/gomoku`）へソースコードを展開します。
 
 ```bash
-mkdir ~/pong-server
-cd ~/pong-server
-npm init -y
-npm install socket.io
+# Example
+git clone [https://github.com/your-repo/gomoku-php.git](https://github.com/your-repo/gomoku-php.git) /var/www/html/gomoku
+sudo chown -R www-data:www-data /var/www/html/gomoku
 ```
 
-※ `server.js` をこのディレクトリに配置してください。
+### 3\. Configuration
 
-### 2-2. クライアント側 (Web) の準備
+`db_connect.php` の接続情報を環境に合わせて修正してください。
 
-Nginx のドキュメントルート配下にクライアント用ディレクトリを作成します。
-
-```bash
-sudo mkdir -p /var/www/html/pong
+```php
+// db_connect.php
+$host = 'localhost';
+$db   = 'gomoku_db';
+$user = 'gomoku_user';
+$pass = 'your_strong_password'; // set your password
 ```
 
-※ `index.html` を `/var/www/html/pong/index.html` として保存してください。
+## Web Server Config
 
-## 3\. サーバー設定 (Configuration)
+### Nginx Example
 
-### Nginx 設定 (リバースプロキシ)
-
-`/etc/nginx/sites-available/default` を編集し、静的ファイルへのアクセスと WebSocket 通信（ポート3000）への転送を設定します。
+PHP-FPMを使用する場合の `sites-available` 設定例です。
 
 \<details\>
-\<summary\>設定ファイルの中身を表示\</summary\>
+\<summary\>Show Nginx Config\</summary\>
 
 ```nginx
 server {
     listen 80;
-    server_name ubuntu.local; # ホスト名に合わせて変更してください
+    server_name your-domain.local;
+    root /var/www/html/gomoku;
+    index index.html;
 
-    # ルートアクセスを /pong/ にリダイレクト
-    location = / {
-        return 301 /pong/;
+    location / {
+        try_files $uri $uri/ =404;
     }
 
-    # HTML/CSS/JS などの静的ファイルを配信
-    location /pong/ {
-        alias /var/www/html/pong/;
-        index index.html;
-    }
-
-    # WebSocket通信を Node.js (3000番) に転送
-    location /socket.io/ {
-        proxy_pass http://localhost:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
+    location ~ \.php$ {
+        include snippets/fastcgi-php.conf;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
     }
 }
 ```
 
 \</details\>
 
-設定の反映:
+## Maintenance (Optional)
+
+放置されたゲームデータを削除するために、Cronの設定を推奨します。
 
 ```bash
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-## 4\. 実行方法
-
-### 手動起動
-
-```bash
-cd ~/pong-server
-node server.js
-```
-
-ブラウザで `http://ubuntu.local/pong/`（または設定したホスト名）に2つのタブでアクセスするとゲームが開始されます。
-
-## 5\. 自動起動設定 (Systemd)
-
-サーバー再起動時にも自動的に Node.js が起動するように設定します。
-
-**ファイル作成**: `/etc/systemd/system/pong.service`
-
-\<details\>
-\<summary\>pong.service の内容を表示\</summary\>
-
-```ini
-[Unit]
-Description=Pong WebSocket Server (Node.js)
-After=network.target
-
-[Service]
-Type=simple
-Restart=always
-
-# 実行ユーザー (環境に合わせて変更)
-User=ubuntu
-
-# server.js があるディレクトリ
-WorkingDirectory=/home/ubuntu/pong-server
-
-# 実行コマンド ('which node' で調べたパスを使用)
-ExecStart=/usr/bin/node server.js
-
-[Install]
-WantedBy=multi-user.target
-```
-
-\</details\>
-
-**サービスの有効化と起動**:
-
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable pong.service
-sudo systemctl start pong.service
+# crontab -e
+30 * * * * php /var/www/html/gomoku/cleanup_games.php
 ```
 
 ## License
