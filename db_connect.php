@@ -2,8 +2,7 @@
 
 $allowed_origins = [
     'http://ubuntu.local', 
-    'https://your-cloudflare-domain.com' // ★ あなたのCloudflareドメインに変更 (httpsの場合)
-    // 'http://your-cloudflare-domain.com' // (httpの場合)
+    'https://your-cloudflare-domain.com'
 ];
 
 // 現在のリクエストのオリジンを取得
@@ -17,7 +16,6 @@ if (in_array($origin, $allowed_origins)) {
 }
 
 // OPTIONSメソッド（プリフライトリクエスト）への対応
-// (ブラウザがPOSTの前に「送っていいか？」と確認するために送る)
 if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
     http_response_code(200);
     exit;
