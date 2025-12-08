@@ -1,8 +1,7 @@
 <?php
-// /var/www/html/gomoku/db_connect.php
 
 $allowed_origins = [
-    'http://ubuntu.local', // ローカルテスト用 (ApacheのServerName)
+    'http://ubuntu.local', 
     'https://your-cloudflare-domain.com' // ★ あなたのCloudflareドメインに変更 (httpsの場合)
     // 'http://your-cloudflare-domain.com' // (httpの場合)
 ];
