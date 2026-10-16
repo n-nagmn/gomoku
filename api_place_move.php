@@ -17,50 +17,80 @@ if (!$game_id || !$player_id || $x === null || $y === null) {
     exit;
 }
 
-// 2. DBから現在のゲーム状態を取得
-$stmt = $pdo->prepare("SELECT * FROM games WHERE game_id = ?");
-$stmt->execute([$game_id]);
-$game = $stmt->fetch();
-
-// 3. バリデーション (検証)
-if (!$game || $game['status'] !== 'playing') {
-    http_response_code(403);
-    echo json_encode(['error' => 'Game is not in playing state']);
-    exit;
-}
-if ($game['current_turn_id'] !== $player_id) {
-    http_response_code(403);
-    echo json_encode(['error' => 'It is not your turn']);
-    exit;
-}
-
-// 4. マスが空いているか検証
-$stmt = $pdo->prepare("SELECT 1 FROM moves WHERE game_id = ? AND x_coord = ? AND y_coord = ?");
-$stmt->execute([$game_id, $x, $y]);
-if ($stmt->fetch()) {
+// 座標の範囲・型バリデーション
+$x = intval($x);
+$y = intval($y);
+if ($x < 0 || $x > 14 || $y < 0 || $y > 14) {
     http_response_code(400);
-    echo json_encode(['error' => 'Cell is already occupied']);
+    echo json_encode(['error' => 'Invalid coordinates']);
     exit;
 }
 
-// 5. 着手をDBに保存 (★状態の更新)
-$stmt = $pdo->prepare("INSERT INTO moves (game_id, player_id, x_coord, y_coord) VALUES (?, ?, ?, ?)");
-$stmt->execute([$game_id, $player_id, $x, $y]);
+// 2. トランザクションで着手全体を原子操作に
+$pdo->beginTransaction();
+try {
+    // 行ロック付きでゲーム状態を取得
+    $stmt = $pdo->prepare("SELECT * FROM games WHERE game_id = ? FOR UPDATE");
+    $stmt->execute([$game_id]);
+    $game = $stmt->fetch();
 
-// 6. 勝利判定ロジック
-$is_win = check_for_win($pdo, $game_id, $player_id, $x, $y);
+    // 3. バリデーション (検証)
+    if (!$game || $game['status'] !== 'playing') {
+        $pdo->rollBack();
+        http_response_code(403);
+        echo json_encode(['error' => 'Game is not in playing state']);
+        exit;
+    }
+    if ($game['current_turn_id'] !== $player_id) {
+        $pdo->rollBack();
+        http_response_code(403);
+        echo json_encode(['error' => 'It is not your turn']);
+        exit;
+    }
+    // 自分の石であることも確認
+    if ($game['player_1_id'] !== $player_id && $game['player_2_id'] !== $player_id) {
+        $pdo->rollBack();
+        http_response_code(403);
+        echo json_encode(['error' => 'You are not a player in this game']);
+        exit;
+    }
 
-if ($is_win) {
-    // 6a. 勝利した場合
-    $stmt = $pdo->prepare("UPDATE games SET status = 'finished', winner_id = ? WHERE game_id = ?");
-    $stmt->execute([$player_id, $game_id]);
-    echo json_encode(['status' => 'win', 'message' => 'You win!']);
-} else {
-    // 6b. ゲーム続行の場合 (ターンを交代)
-    $other_player_id = ($player_id == $game['player_1_id']) ? $game['player_2_id'] : $game['player_1_id'];
-    $stmt = $pdo->prepare("UPDATE games SET current_turn_id = ? WHERE game_id = ?");
-    $stmt->execute([$other_player_id, $game_id]);
-    echo json_encode(['status' => 'success']);
+    // 4. マスが空いているか検証
+    $stmt = $pdo->prepare("SELECT 1 FROM moves WHERE game_id = ? AND x_coord = ? AND y_coord = ?");
+    $stmt->execute([$game_id, $x, $y]);
+    if ($stmt->fetch()) {
+        $pdo->rollBack();
+        http_response_code(400);
+        echo json_encode(['error' => 'Cell is already occupied']);
+        exit;
+    }
+
+    // 5. 着手をDBに保存 (★状態の更新)
+    $stmt = $pdo->prepare("INSERT INTO moves (game_id, player_id, x_coord, y_coord) VALUES (?, ?, ?, ?)");
+    $stmt->execute([$game_id, $player_id, $x, $y]);
+
+    // 6. 勝利判定ロジック
+    $is_win = check_for_win($pdo, $game_id, $player_id, $x, $y);
+
+    if ($is_win) {
+        // 6a. 勝利した場合
+        $stmt = $pdo->prepare("UPDATE games SET status = 'finished', winner_id = ? WHERE game_id = ?");
+        $stmt->execute([$player_id, $game_id]);
+        $pdo->commit();
+        echo json_encode(['status' => 'win', 'message' => 'You win!']);
+    } else {
+        // 6b. ゲーム続行の場合 (ターンを交代)
+        $other_player_id = ($player_id == $game['player_1_id']) ? $game['player_2_id'] : $game['player_1_id'];
+        $stmt = $pdo->prepare("UPDATE games SET current_turn_id = ? WHERE game_id = ?");
+        $stmt->execute([$other_player_id, $game_id]);
+        $pdo->commit();
+        echo json_encode(['status' => 'success']);
+    }
+} catch (Exception $e) {
+    $pdo->rollBack();
+    http_response_code(500);
+    echo json_encode(['error' => 'Internal error']);
+    exit;
 }
 
 exit;

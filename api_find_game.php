@@ -24,16 +24,42 @@ if ($waiting_game) {
     $player_1_id = $waiting_game['player_1_id'];
     $player_2_id = $player_id;
 
-    // ゲームを 'playing' 状態に更新し、P2と最初のターンを設定
+    // 競合防止: 未参加の待機中ゲームであること（status='waiting' かつ player_2_id=NULL）を保証条件で更新
     $stmt = $pdo->prepare("UPDATE games 
                            SET player_2_id = ?, status = 'playing', current_turn_id = ? 
-                           WHERE game_id = ?");
+                           WHERE game_id = ? AND status = 'waiting' AND player_2_id IS NULL");
     $stmt->execute([$player_2_id, $player_1_id, $game_id]);
-    
-    echo json_encode([
-        'game_id' => $game_id,
-        'role' => 'player_2' // あなたはP2(白)です
-    ]);
+
+    $joined = ($stmt->rowCount() === 1);
+    if (!$joined) {
+        // 競合で他人が先に参加していた → 待機ゲームを再探索して1回だけ参加を再試行
+        $stmt2 = $pdo->prepare("SELECT * FROM games WHERE status = 'waiting' AND player_1_id != ? LIMIT 1");
+        $stmt2->execute([$player_id]);
+        $next_game = $stmt2->fetch();
+        if ($next_game) {
+            $stmt3 = $pdo->prepare("UPDATE games SET player_2_id = ?, status = 'playing', current_turn_id = ? WHERE game_id = ? AND status = 'waiting' AND player_2_id IS NULL");
+            $stmt3->execute([$player_id, $next_game['player_1_id'], $next_game['game_id']]);
+            if ($stmt3->rowCount() === 1) {
+                $game_id = $next_game['game_id'];
+                $joined = true;
+            }
+        }
+    }
+
+    if ($joined) {
+        echo json_encode([
+            'game_id' => $game_id,
+            'role' => 'player_2' // あなたはP2(白)です
+        ]);
+    } else {
+        // 再探索にも失敗 → 自分がP1として新規作成
+        $stmt = $pdo->prepare("INSERT INTO games (player_1_id, status) VALUES (?, 'waiting')");
+        $stmt->execute([$player_id]);
+        echo json_encode([
+            'game_id' => $pdo->lastInsertId(),
+            'role' => 'player_1'
+        ]);
+    }
 
 } else {
     // 4. 待機中のゲームがない場合 (自分がP1として新規作成)

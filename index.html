@@ -139,8 +139,17 @@
         const infoDisplay = document.getElementById('game-info');
         const startButton = document.getElementById('start-button');
         
-        // 1. クライアント固有のIDをセッションストレージで管理
-        let myPlayerId = 'player_' + Date.now() + Math.floor(Math.random() * 10000);
+        // 1. クライアント固有のIDをlocalStorageで永続化（リフレッシュしても同一プレイヤーとして扱われる）
+        let myPlayerId;
+        try {
+            myPlayerId = localStorage.getItem('gomoku_player_id');
+            if (!myPlayerId) {
+                myPlayerId = 'player_' + Date.now() + Math.floor(Math.random() * 1000000);
+                localStorage.setItem('gomoku_player_id', myPlayerId);
+            }
+        } catch (e) {
+            myPlayerId = 'player_' + Date.now() + Math.floor(Math.random() * 1000000);
+        }
 
         let gameState = {
             game_id: null,
@@ -203,7 +212,13 @@
                 } else {
                     infoDisplay.textContent = "あなたの敗北です...。";
                 }
-                clearInterval(pollingInterval); // ゲーム終了なのでポーリング停止
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
+                // 次戦に備えてボタンを復旧
+                startButton.disabled = false;
+                startButton.textContent = "ゲームを探す";
             }
         }
 
@@ -241,7 +256,10 @@
 
         // 5. API: ポーリング
         function startPolling() {
-            if (pollingInterval) clearInterval(pollingInterval);
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
             fetchState(); 
             pollingInterval = setInterval(fetchState, 2000);
         }
@@ -268,7 +286,10 @@
                 
             } catch (err) {
                 infoDisplay.textContent = "ポーリングエラー: " + err.message;
-                clearInterval(pollingInterval);
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
             }
         }
         
@@ -312,11 +333,7 @@
                     return;
                 }
                 
-                if (pollingInterval) {
-                    clearInterval(pollingInterval);
-                    fetchState();
-                    pollingInterval = setInterval(fetchState, 2000);
-                }
+                fetchState(); // 着手直後に即座に最新状態を取得
                 
             } catch (err) {
                 infoDisplay.textContent = "着手エラー: " + err.message;
