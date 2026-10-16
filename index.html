@@ -161,6 +161,9 @@
         };
         
         let pollingInterval = null;
+        let pollRetryCount = 0;      // 連続失敗カウント
+        const MAX_POLL_RETRIES = 3;  // 最大リトライ回数
+        let isPlacing = false;       // 着手リクエスト進行中フラグ (二重クリック防止)
 
         // 1. 盤面(セル)の初期化
         function initializeBoard() {
@@ -276,19 +279,32 @@
                 
                 if (data.error) throw new Error(data.error);
 
+                // 成功したらリトライカウントをリセット
+                pollRetryCount = 0;
+
                 gameState.status = data.status;
                 gameState.current_turn_id = data.current_turn_id;
                 gameState.winner_id = data.winner_id;
-                gameState.player_1_id = data.player_1_id; 
+                gameState.player_1_id = data.player_1_id;
                 
                 drawBoard(data.moves);
                 updateInfo();
                 
             } catch (err) {
-                infoDisplay.textContent = "ポーリングエラー: " + err.message;
-                if (pollingInterval) {
-                    clearInterval(pollingInterval);
-                    pollingInterval = null;
+                // ネットワークエラー等で失敗した場合
+                pollRetryCount++;
+                if (pollRetryCount > MAX_POLL_RETRIES) {
+                    // 最大リトライ回数(3回)を超過 → ポーリング停止
+                    infoDisplay.textContent = "ポーリングエラー: " + err.message;
+                    if (pollingInterval) {
+                        clearInterval(pollingInterval);
+                        pollingInterval = null;
+                    }
+                } else {
+                    // 指数バックオフ (1秒 → 2秒 → 4秒) 後に単発で再試行
+                    const delayMs = Math.pow(2, pollRetryCount) * 1000;
+                    infoDisplay.textContent = `ポーリングエラー: ${err.message} (${pollRetryCount}/${MAX_POLL_RETRIES} リトライ中, ${delayMs/1000}秒後に再試行...)`;
+                    setTimeout(fetchState, delayMs);
                 }
             }
         }
@@ -306,10 +322,16 @@
                 infoDisplay.textContent = "そこには既に石があります";
                 return;
             }
-            
+
+            // 既に進行中の着手リクエストがある場合は無視 (二重クリック防止)
+            if (isPlacing) return;
+
             const x = parseInt(e.target.dataset.x, 10);
             const y = parseInt(e.target.dataset.y, 10);
-            
+
+            // await より前に即座に進行中フラグを立てておく
+            isPlacing = true;
+
             try {
                 const response = await fetch('api_place_move.php', {
                     method: 'POST',
@@ -337,6 +359,9 @@
                 
             } catch (err) {
                 infoDisplay.textContent = "着手エラー: " + err.message;
+            } finally {
+                // 成功/失敗のどちらでもフラグを解除して次に備える
+                isPlacing = false;
             }
         });
 

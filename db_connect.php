@@ -5,6 +5,9 @@ $allowed_origins = [
     'https://your-cloudflare-domain.com'
 ];
 
+// 全てのAPIレスポンスのContent-Typeをapplication/jsonに設定
+header('Content-Type: application/json; charset=utf-8');
+
 // 現在のリクエストのオリジンを取得
 $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
